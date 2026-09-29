@@ -1,0 +1,87 @@
+import streamlit as st
+from dotenv import load_dotenv
+from langchain_upstage import UpstageEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_classic.chains import RetrievalQA
+from langchain_core.output_parsers import StrOutputParser
+
+load_dotenv()
+
+def get_ai_message(user_question):
+    embedding = UpstageEmbeddings(model="solar-embedding-1-large")
+    index_name = "tax-markdown-index"
+
+    database = PineconeVectorStore.from_existing_index(index_name=index_name, embedding=embedding)
+
+    llm = ChatOpenAI(model="gpt-4o")
+
+    prompt = ChatPromptTemplate.from_messages([
+        ('system', """소득세법에 대한 질문에 아래 context를 근거로 답변하세요.
+        질문에 대한 직접적인 문장이 없더라도, 공제 규정과 세율표를 활용해 단계적으로 계산할 수 있다면 계산하여 결과만을 도출해주세요
+        context에서 전혀 근거를 찾을 수 없을 때만 모른다고 답하세요.
+
+        [Context]
+        {context}
+        """),
+        ('human', '{question}')
+    ])
+    retriever = database.as_retriever()
+
+    qa_chain = RetrievalQA.from_chain_type(
+         llm,
+         retriever=retriever,
+         chain_type_kwargs={"prompt": prompt}
+    )
+
+    dictionary = ["사람을 나타내는 표현 -> 거주자"]
+
+    keyword_prompt = ChatPromptTemplate.from_template(
+        f"""사용자의 질문을 보고, 우리의 사전을 참고하여 사용자의 질문을 변경해주세요.
+        만약 변경이 필요 없다고 판단되면 사용자의 질문을 변경하지 않아도 됩니다.
+        그런 경우에는 질문만 리턴해주세요
+
+        사전 : {dictionary}
+
+        질문 : {{question}}
+        """
+    )
+
+    dictionary_chain = keyword_prompt | llm | StrOutputParser()
+
+    tax_chain = {"query": dictionary_chain} | qa_chain
+
+    ai_message = tax_chain.invoke({"question": user_question})['result']
+
+    return ai_message
+
+
+st.set_page_config(page_title="소득세 챗봇", page_icon="🤖")
+
+st.title("소득세 Chatbot")
+st.caption("소득세에 관련된 모든것을 답해드립니다!")
+
+if 'message_list' not in st.session_state:
+    st.session_state.message_list = []
+
+for message in st.session_state.message_list:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+if user_question := st.chat_input(placeholder="소득세에 관련된 궁금한 내용들을 말씀해주세요") :
+    with st.chat_message("user"):
+        st.write(user_question)
+    st.session_state.message_list.append({"role":"user", "content": user_question})
+
+    with st.spinner("답변을 생성하는 중입니다."):
+        ai_message = get_ai_message(user_question)
+
+        with st.chat_message("ai"):
+                st.write(ai_message)
+        st.session_state.message_list.append({"role":"ai", "content": ai_message})
+
+
+
+
+
