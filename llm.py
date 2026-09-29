@@ -1,13 +1,14 @@
 from langchain_upstage import UpstageEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, FewShotChatMessagePromptTemplate
 from langchain_classic.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from config import answer_examples
 
 import uuid
 
@@ -53,18 +54,19 @@ def get_dictionary_chain():
     return dictionary_chain
 
 
-def get_rag_chain(index_name):
-    retriever = get_retriever(index_name)
+def get_history_retriever(index_name):
     llm = get_llm()
 
-    contextualize_q_system_prompt = (
-        "Given a chat history and the latest user question "
-        "which might reference context in the chat history, "
-        "formulate a standalone question which can be understood "
-        "without the chat history. Do NOT answer the question, "
-        "just reformulate it if needed and otherwise return it as is."
-    )
+    retriever = get_retriever(index_name)
 
+    contextualize_q_system_prompt = (
+            "Given a chat history and the latest user question "
+            "which might reference context in the chat history, "
+            "formulate a standalone question which can be understood "
+            "without the chat history. Do NOT answer the question, "
+            "just reformulate it if needed and otherwise return it as is."
+        )
+    
     contextualize_q_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", contextualize_q_system_prompt),
@@ -79,6 +81,24 @@ def get_rag_chain(index_name):
         contextualize_q_prompt
     )
 
+    return history_aware_retriever
+
+
+def get_rag_chain(index_name):
+    llm = get_llm()
+
+    example_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("human", "{input}"),
+            ("ai", "{answer}")
+        ]
+    )
+
+    few_shot_prompt = FewShotChatMessagePromptTemplate(
+        example_prompt=example_prompt,
+        examples=answer_examples
+    )
+    
     system_prompt = (
         "당신은 소득세법 전문가입니다. 사용자의 소득세법에 관한 질문에 답변해주세요"
         "아래에 제공된 문서를 활용해서 답변해주시고"
@@ -92,6 +112,7 @@ def get_rag_chain(index_name):
     qa_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system_prompt),
+            few_shot_prompt,
             MessagesPlaceholder("chat_history"),
             ("human", "{input}")
         ]
@@ -99,8 +120,11 @@ def get_rag_chain(index_name):
 
     qa_chain = create_stuff_documents_chain(llm, qa_prompt)
 
+    history_aware_retriever = get_history_retriever(index_name)
+
     rag_chain = create_retrieval_chain(history_aware_retriever, qa_chain)
 
+    # RunnableWithMessageHistory : 히스토리에 저장
     conversational_rag_chain = RunnableWithMessageHistory(
         rag_chain,
         get_session_history,
@@ -110,6 +134,7 @@ def get_rag_chain(index_name):
     ).pick("answer")
 
     return conversational_rag_chain
+
 
 def get_ai_response(user_question):
     index_name = "tax-markdown-index"
