@@ -16,3 +16,5 @@ Streamlit은 기본적으로 React로 컴포넌트화하여 추상화 후 매핑
 pip freeze > requirements.txt
 ```
 
+## 실제 구현 화면 예시
+<img width="776" height="681" alt="image" src="https://github.com/user-attachments/assets/c4642501-a6f7-4c0e-8707-74f18c6bd0a9" />
